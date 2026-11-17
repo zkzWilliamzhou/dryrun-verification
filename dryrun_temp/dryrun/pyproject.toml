@@ -1,0 +1,50 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "dryrun"
+version = "0.1.0"
+description = "The universal --dry-run flag: explain, audit, and simulate any shell command before you run it."
+readme = "README.md"
+requires-python = ">=3.9"
+license = { text = "MIT" }
+authors = [{ name = "dryrun contributors" }]
+keywords = ["dry-run", "shell", "safety", "cli", "simulate", "preview", "audit"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Environment :: Console",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: POSIX :: Linux",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: C",
+    "Topic :: System :: Systems Administration",
+    "Topic :: Software Development :: Quality Assurance",
+]
+
+[project.scripts]
+dryrun = "dryrun.cli:main"
+
+[project.urls]
+Homepage = "https://github.com/dryrun-cli/dryrun"
+
+[project.optional-dependencies]
+dev = ["pytest>=8"]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+# Ship the shim source and Makefile only; the trace engine compiles
+# shadowlib on first use (sha256-cached per docs/DESIGN.md), so no
+# machine-specific .so belongs in a pure-python wheel.
+[tool.setuptools.package-data]
+dryrun = ["native/shadowlib.c", "native/Makefile"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"

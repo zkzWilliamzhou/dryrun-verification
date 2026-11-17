@@ -1,0 +1,141 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>dryrun - Architecture Review: Deepening Opportunities</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<script type="module">
+  import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.esm.min.mjs';
+  mermaid.initialize({ startOnLoad: true, theme: 'neutral', themeVariables: { fontSize: '13px' } });
+</script>
+</head>
+<body class="bg-stone-100 text-stone-800">
+<div class="max-w-4xl mx-auto py-10 px-6 space-y-8">
+
+  <header class="space-y-2">
+    <p class="text-xs uppercase tracking-widest text-amber-700 font-semibold">Architecture review - deepening opportunities</p>
+    <h1 class="text-3xl font-bold">dryrun: two engines, four drifting policies</h1>
+    <p class="text-stone-600">Scope: the two simulation engines are the hot spot of the last five commits
+    (<code>simulate/trace.py</code>, 753 lines; <code>simulate/sandbox.py</code>, 326 lines).
+    Both turn a pair of file trees into sorted <code>ChangeRecord</code> lists; each keeps its own copy
+    of the diff-and-sort policy. Vocabulary: <em>module</em>, <em>interface</em>, <em>depth</em>,
+    <em>seam</em>, <em>locality</em>, <em>leverage</em>, per the codebase-design skill.</p>
+  </header>
+
+  <!-- CANDIDATE A -->
+  <section class="bg-white rounded-xl shadow p-6 space-y-4 border-l-4 border-emerald-500">
+    <div class="flex items-start justify-between">
+      <h2 class="text-xl font-bold">A. Deepen diff policy into one <code>diffops</code> seam</h2>
+      <span class="bg-emerald-100 text-emerald-800 text-xs font-bold px-3 py-1 rounded-full uppercase tracking-wide">Strong</span>
+    </div>
+    <p class="text-sm text-stone-600"><span class="font-semibold">Files:</span>
+      simulate/trace.py, simulate/sandbox.py &rarr; new simulate/diffops.py</p>
+    <p><span class="font-semibold">Problem.</span> Four policy points are duplicated across the two engines,
+      each a copy that can drift: <code>_human_size</code> (verbatim twice), <code>_unified_diff</code>
+      (same algorithm, two signatures), the caps <code>_MAX_DIFF_BYTES = 256 KiB</code> /
+      <code>_MAX_DIFF_CHARS = 4096</code> (same values, declared twice), and the change ordering
+      <code>_OP_SORT_ORDER</code> plus its <code>(op, path)</code> sort key (declared twice).
+      A bug fixed in one copy - say, the diff truncation rule - silently survives in the other.
+      These helpers are <em>shallow</em>: their interface is nearly as wide as their body, so the
+      seam between the engines hides nothing.</p>
+    <p><span class="font-semibold">Solution.</span> One deep module, <code>simulate/diffops.py</code>,
+      owning the whole "how a preview renders change" policy behind four names:
+      <code>human_size(n)</code>, <code>unified_diff(old, new, rel, *, old_size=None, new_size=None)</code>
+      (sizes optional so both call sites keep their exact semantics), <code>OP_SORT_ORDER</code>,
+      and <code>sort_changes(changes)</code>. Both engines import it; their local copies are deleted.</p>
+    <p><span class="font-semibold">Benefits.</span> <em>Locality:</em> every rule about diff caps,
+      binary fallback, and change ordering lives in one file - reviewing the preview policy means
+      reading one module, not diffing two engines. <em>Leverage:</em> one signature unifies both
+      call shapes without behavior change (OSError paths fall through to <code>None</code> in both).
+      Tests improve: the policy gets one direct test surface (<code>tests/test_diffops.py</code>)
+      instead of being covered twice incidentally through each engine.</p>
+    <div class="grid grid-cols-2 gap-4 text-sm">
+      <div class="bg-stone-50 rounded-lg p-4">
+        <p class="font-semibold mb-2 text-stone-500">Before - policy x2, drift risk</p>
+        <pre class="text-xs leading-5">trace.py    sandbox.py
+  _human_size    _human_size      (copy)
+  _unified_diff  _unified_diff    (copy)
+  _MAX_DIFF_*    _MAX_DIFF_*      (copy)
+  _OP_SORT_ORDER _OP_SORT_ORDER   (copy)</pre>
+      </div>
+      <div class="bg-emerald-50 rounded-lg p-4">
+        <p class="font-semibold mb-2 text-emerald-700">After - one deep seam</p>
+        <pre class="text-xs leading-5">trace.py   &rarr; diffops.human_size
+sandbox.py &rarr; diffops.unified_diff
+           &rarr; diffops.sort_changes
+
+        diffops.py  (owns caps,
+                     order, rendering)</pre>
+      </div>
+    </div>
+    <p class="text-sm text-stone-600"><span class="font-semibold">Deletion test:</span> deleting the
+      duplicate copies and routing both engines through one module <em>concentrates</em> the policy
+      instead of moving it - the signal we want. <span class="font-semibold">Behavior lock:</span>
+      360 tests green plus identical behavior-snapshot manifest before and after.</p>
+  </section>
+
+  <!-- CANDIDATE B -->
+  <section class="bg-white rounded-xl shadow p-6 space-y-4 border-l-4 border-stone-300">
+    <div class="flex items-start justify-between">
+      <h2 class="text-xl font-bold">B. Unify the two tree walks</h2>
+      <span class="bg-stone-200 text-stone-700 text-xs font-bold px-3 py-1 rounded-full uppercase tracking-wide">Speculative - rejected</span>
+    </div>
+    <p class="text-sm text-stone-600"><span class="font-semibold">Files:</span>
+      <code>_scan_shadow_tree</code> (trace) vs <code>_walk_tree</code> (sandbox)</p>
+    <p>Both wrap <code>os.walk</code> with an <code>on_error</code> note collector, but the trace walk
+      also resolves tombstone markers against the shim's unlink log - a genuinely different job.
+      Forcing them into one function would build a shallow mega-interface
+      (<em>walk(root, *, tombstones=None, unlink_paths=None, ...)</em>) whose parameter list is as
+      complex as the bodies it hides. <span class="font-semibold">Deletion test fails:</span> deleting
+      either walk just moves its complexity next door. Not pursued.</p>
+  </section>
+
+  <!-- CANDIDATE C -->
+  <section class="bg-white rounded-xl shadow p-6 space-y-4 border-l-4 border-amber-400">
+    <div class="flex items-start justify-between">
+      <h2 class="text-xl font-bold">C. Unify the byte comparators</h2>
+      <span class="bg-amber-100 text-amber-800 text-xs font-bold px-3 py-1 rounded-full uppercase tracking-wide">Worth exploring - deferred</span>
+    </div>
+    <p class="text-sm text-stone-600"><span class="font-semibold">Files:</span>
+      <code>_same_bytes</code> (trace) vs <code>filecmp.cmp(shallow=False)</code> (sandbox)</p>
+    <p>Two implementations of "are these files equal" for the same purpose. Their equality decisions
+      agree on real files today, but <code>filecmp</code> keeps an internal stat cache whose
+      invalidation rules differ from a plain streaming compare. Swapping either side changes no
+      output but touches the engine core; the leverage is small (about 20 lines) and the freeze
+      contract on both engines is strict. Deferred: revisit only if an engine needs to change anyway.</p>
+  </section>
+
+  <!-- TOP RECOMMENDATION -->
+  <section class="bg-stone-900 text-stone-100 rounded-xl shadow p-6 space-y-3">
+    <p class="text-xs uppercase tracking-widest text-amber-400 font-semibold">Top recommendation</p>
+    <h2 class="text-2xl font-bold">Do candidate A now</h2>
+    <p class="text-stone-300 text-sm">It is the only candidate that passes the deletion test cleanly.
+      The seam is real (two adapters already exist - that makes it a proven seam, not a hypothetical
+      one), the interface shrinks (four names replace eight), and the behavior lock is mechanical:
+      full test suite plus the frozen snapshot manifest
+      <code>sha256=a0894728&hellip;</code> must be bit-identical after the change. B is rejected by
+      the deletion test; C is sound but low-leverage and deferred. Because this session runs
+      headless, the grilling loop was replaced by the boss decision recorded here and in the commit
+      message: apply A, verify the lock, ship.</p>
+    <div class="mermaid text-stone-100">
+flowchart LR
+  subgraph before ["Before"]
+    T[trace.py] --> P1["_human_size\n_unified_diff\n_OP_SORT_ORDER"]
+    S[sandbox.py] --> P2["_human_size\n_unified_diff\n_OP_SORT_ORDER"]
+  end
+  subgraph after ["After"]
+    T2[trace.py] --> D
+    S2[sandbox.py] --> D
+    D[diffops.py<br/>one deep seam]
+  end
+  before == "deepening" ==> after
+    </div>
+  </section>
+
+  <footer class="text-xs text-stone-500 pb-6">
+    Generated by the improve-codebase-architecture review. Behavior lock: 360 tests + snapshot
+    manifest must be identical before and after any applied candidate.
+  </footer>
+</div>
+</body>
+</html>
