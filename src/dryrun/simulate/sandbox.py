@@ -11,6 +11,7 @@ import os
 import shutil
 import stat
 import subprocess
+import sys
 import tempfile
 from typing import Dict, List, Optional, Tuple
 
@@ -57,11 +58,20 @@ def _walk_tree(root: str) -> Tuple[Dict[str, _Entry], List[str]]:
 
 
 def _copy_tree(src: str, dst: str) -> List[str]:
-    """Copy ``src``'s contents into ``dst``; prefer cp -a with reflinks."""
+    """Copy ``src``'s contents into ``dst``; prefer cp -a with reflinks.
+
+    ``--reflink=auto`` is a GNU-only option: BSD/macOS ``cp`` rejects it,
+    which would force the slow Python fallback on every run and leak an
+    environment-dependent note into results. Only pass it on Linux.
+    """
     cp_error: Optional[str] = None
+    cmd = ["cp", "-a"]
+    if sys.platform.startswith("linux"):
+        cmd.append("--reflink=auto")
+    cmd += [src + "/.", dst + "/"]
     try:
         proc = subprocess.run(
-            ["cp", "-a", "--reflink=auto", src + "/.", dst + "/"],
+            cmd,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
             check=False,
